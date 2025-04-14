@@ -1,0 +1,42 @@
+
+[build-system]
+requires = ["setuptools >= 61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mammoth_websocket"
+authors = [
+  { name="sunfounder", email="service@sunfounder.com" },
+]
+description = "Robot Hat Python library for Raspberry Pi"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: POSIX :: Linux",
+]
+keywords = ["mammoth_websocket", "sunfounder"]
+dynamic = ["version"]
+
+dependencies = [
+  "websockets",
+]
+
+[project.scripts]
+mammoth_websocket = "mammoth_websocket:__main__"
+
+[project.urls]
+Homepage = "https://github.com/sunfounder/mammoth_websocket/"
+Repository = "https://github.com/sunfounder/mammoth_websocket/"
+Issues = "https://github.com/sunfounder/mammoth_websocket/issues"
+Changelog = "https://github.com/sunfounder/mammoth_websocket/commits/"
+
+[tool.setuptools.packages.find]
+include = ["mammoth_websocket"]
+exclude = ["setup.py", "docs", 'tests*', 'examples', 'workspace']
+
+[tool.setuptools.dynamic]
+version = {attr = "mammoth_websocket.version.__version__"}
+
+
