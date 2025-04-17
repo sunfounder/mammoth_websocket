@@ -149,8 +149,7 @@ class MammothWebSocket():
         ## remove client
         self.clients.pop(str(_client_id))
 
-
-    async def asyn_send(self, data, client_num=None):
+    async def async_send(self, data, client_num=None):
         ## define send single client function
         async def _send_work(client_num, data):
             client = self.clients[str(client_num)]
@@ -175,17 +174,16 @@ class MammothWebSocket():
 
             # print('send data: %s'%data)
 
-
     async def response(self, status, error=[], data={}):
         _response = {
             'status': status,
             'error': error,
             'data': data
         }
-        await self.asyn_send(json.dumps(_response))
+        await self.async_send(json.dumps(_response))
     
     def send(self, data, client_num=None):
-        asyncio.run(self.asyn_send(data, client_num))
+        asyncio.run(self.async_send(data, client_num))
 
 
     def entities_to_bytes(self, entities):
@@ -212,7 +210,7 @@ class MammothWebSocket():
             if not isinstance(value['value'], list):
                 value['value'] = [value['value']]
 
-            print(f'{key}: {value["value"]}')
+            # print(f'{key}: {value["value"]}')
             _value.extend(numbers_to_bytes(value['value'], value['type']))
             data += [_id] + _value
 
@@ -283,7 +281,7 @@ class MammothWebSocket():
             _data = entities_data[index+1:index+1+_len]
             entities[_name]['value'] = bytes_to_numbers(_data, _types)
             index += _len + 1
-            print(f'{_name}: {entities[_name]["value"]}')
+            # print(f'{_name}: {entities[_name]["value"]}')
 
             _entities_temp[_name] = entities[_name]
 
