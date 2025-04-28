@@ -79,7 +79,10 @@ class MammothWebSocket():
         self.is_received = False
         self.send_dict = {}
         self.device_info = {}
-        self.on_receive = None
+        self.on_device_config = lambda x: None
+        self.on_io_data = lambda x: None
+        self.command_entities = None
+        self.sensor_entities = None
         self.on_connect = None
         self.on_disconnect = None
         self.last_rev_time = 0
@@ -108,6 +111,44 @@ class MammothWebSocket():
             await asyncio.Future() # run forever
         print('server closed')
 
+    async def on_receive(self, data, client_num):
+        # command
+        if isinstance(data, str):
+            # print(f"Received string ({client_id}): {data}")
+            if data.startswith('SET+'):
+                try:
+                    data = data[4:]
+                    data = json.loads(data)
+                    self.on_device_config(data)
+                    await self.response('OK')
+                except Exception as e:
+                    await self.response('ERROR', ['Invalid json format', f'{e}'] )
+            else:
+                await self.response('ERROR', ['Invalid command format'])
+
+        # data
+        elif isinstance(data, bytes):
+            # read command
+            if self.command_entities is None:
+                await self.response('ERROR', ['command_entities is None'])
+                return
+            data = self.bytes_to_entities(self.command_entities, data)
+            if isinstance(data, dict):
+                # handle command
+                self.on_io_data(data)
+            else:
+                print(f"Invalid command format ({client_num}): {data}")
+
+    def _on_connect(self, *args, **kwargs):
+        print(f"On connected: {args} {kwargs}")
+        if self.on_connect is not None:
+            self.on_connect()
+
+    def _on_disconnect(self, *args, **kwargs):
+        print(f"On disconneted: {args} {kwargs}")
+        if self.on_disconnect is not None:
+            self.on_disconnect()
+
     async def websocket_loop(self, websocket):
         _client_id = str(self.client_num)
         _client_ip = websocket.remote_address[0]
@@ -123,13 +164,12 @@ class MammothWebSocket():
         ## send_device_info
         await websocket.send(json.dumps(self.device_info))
 
-        if self.on_connect != None:
-            self.on_connect()
+        self._on_connect(_client_id)
 
         try:
             # listen messages loop
             async for message in websocket:
-                print(f'{time.time()-self.last_rev_time:.5f} {_client_id}: {message}')
+                # print(f'{time.time()-self.last_rev_time:.5f} {_client_id}: {message}')
                 self.last_rev_time = time.time()
                 if self.on_receive != None:
                     await self.on_receive(message, _client_id)
@@ -143,8 +183,7 @@ class MammothWebSocket():
             print(f'client {_client_id, _client_ip} disconneted with error:\n{e.code}:{e.reason}')
             
         ## disconneted handler
-        if self.on_disconnect != None:
-            self.on_disconnect()
+        self._on_disconnect(_client_id)
 
         ## remove client
         self.clients.pop(str(_client_id))
@@ -173,6 +212,13 @@ class MammothWebSocket():
                 await _send_work(client_num, data)
 
             # print('send data: %s'%data)
+
+    async def send_sensor_data(self):
+        # for id, sensor in self.sensor_entities.ids.items():
+        #     print(f'{sensor.name}: {sensor.values}')
+        data = self.entities_to_bytes(self.sensor_entities)
+        
+        await self.async_send(data)
 
     async def response(self, status, error=[], data={}):
         _response = {
@@ -203,16 +249,20 @@ class MammothWebSocket():
         END = 0xA1
         data = []
         ## fix data buffer
-        for key, value in entities.items():
-            _id = value['id']
-            _value = []
+        for _id, entity in entities.ids.items():
+            result = []
+            if entity.values is None:
+                continue
 
-            if not isinstance(value['value'], list):
-                value['value'] = [value['value']]
-
-            # print(f'{key}: {value["value"]}')
-            _value.extend(numbers_to_bytes(value['value'], value['type']))
-            data += [_id] + _value
+            if 'str' in entity.types:
+                string = entity.value
+                str_length = len(string)
+                if str_length > 0:
+                    result.extend(numbers_to_bytes([str_length], [entity.types[0]]))
+                    result.extend(bytes(string, 'utf-8'))
+            else:
+                result.extend(numbers_to_bytes(entity.values, entity.types))
+            data += [_id] + result
 
         ## calculate checksum
         checksum = 0
@@ -221,8 +271,7 @@ class MammothWebSocket():
 
         ## pack data
         data = [START] + [len(data)] + [checksum] + data + [END]
-        data_hex = [f'0x{d:02x}' for d in data]
-        # print(f'data_hex: {data_hex}')
+        # print(f'data_hex: {[f'0x{d:02x}' for d in data]}')
         return bytes(data)
 
     def bytes_to_entities(self, entities, data):
@@ -230,10 +279,9 @@ class MammothWebSocket():
         END = 0xA1
         MIN_LEN = 6
 
-        # print(f'data: {data}, {type(data)}')
         data = list(data)
-        data_hex = [f'0x{d:02x}' for d in data]
-        # print(f'data hex: {data_hex}')
+        print(f'data hex: {" ".join([f"0x{d:02x}" for d in data])}')
+        result = {}
         if len(data) < MIN_LEN:
             print('data length error')
             return False
@@ -269,24 +317,30 @@ class MammothWebSocket():
         _entities_temp = {}
         while (index < _data_len):
             _id = entities_data[index]
-            if _id not in entities['id'].keys():
+            if _id not in entities.ids.keys():
                 print(f'entity id not found: {_id}')
                 index += 1
                 continue
 
             # print(f'_id: {_id}', end='\t')
-            _name = entities['id'][_id]
-            _len = entities[_name]['len']
-            _types = entities[_name]['type']
+            entity = entities.ids[_id]
+            _len = entity.length
+            _types = entity.types
             _data = entities_data[index+1:index+1+_len]
-            entities[_name]['value'] = bytes_to_numbers(_data, _types)
             index += _len + 1
-            # print(f'{_name}: {entities[_name]["value"]}')
-
-            _entities_temp[_name] = entities[_name]
-
-        return _entities_temp
-        # print(f'entities ({id(entities)}): {entities}')
+            if 'str' in _types:
+                _temp_types = _types.copy()
+                _temp_types.remove('str')
+                _strlen = bytes_to_numbers(_data, _temp_types)[0]
+                _data = entities_data[index:index+_strlen]
+                # _data = ''.join([d.decode('utf-8') for d in _data])
+                _data = bytes(_data).decode('utf-8')
+                index += _strlen
+                result[entity.name] = _data
+            else:
+                _data = bytes_to_numbers(_data, _types)
+                result[entity.name] = _data
+        return result
 
 
 
