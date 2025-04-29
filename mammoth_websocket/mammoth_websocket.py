@@ -70,11 +70,10 @@ class MammothWebSocket():
 
     DEFAULT_PORT = 30102
 
-    def __init__(self, port=DEFAULT_PORT):
+    def __init__(self, port=DEFAULT_PORT, data_interval=20):
         self.port = port
         self.server_thread = threading.Thread(target=self.server_run)
         self.server_thread.daemon = True
-        self.client_num = 0
         self.clients = {}
         self.is_received = False
         self.send_dict = {}
@@ -86,32 +85,71 @@ class MammothWebSocket():
         self.on_connect = None
         self.on_disconnect = None
         self.last_rev_time = 0
+        self.loop = None  # 新增事件循环引用
+        self.data_interval = data_interval
+        self.client_num = 0
+        self.broadcast_task = None
 
     def start(self):
-        self.work_flag = True
+        self.running = True
         self.server_thread.start()
+        self.broadcast_task = threading.Thread(target=self.run_broadcast)
+        self.broadcast_task.start()
+
+    def run_broadcast(self):
+        self.broadcast_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.broadcast_loop)
+        self.broadcast_loop.run_until_complete(self.broadcast_sensor_data())
+
+    async def broadcast_sensor_data(self):
+        """Broadcast sensor data to all connected clients."""
+        while self.running:
+            try:
+                # 添加数据有效性检查
+                if not self.sensor_entities:
+                    print("Sensor entities not initialized")
+                    await asyncio.sleep(1)
+                    continue
+                
+                # 生成传感器数据
+                with self.sensor_entities.data_lock:
+                    data = self.entities_to_bytes(self.sensor_entities)
+                
+                if len(data) == 0:
+                    await asyncio.sleep(self.data_interval/1000)
+
+                if len(self.clients) == 0:
+                    await asyncio.sleep(self.data_interval/1000)
+                    continue
+                
+                # print(f"Broadcasting data: {' '.join([f'{x:02x}' for x in data])}")
+
+                # 遍历所有客户端广播
+                tasks = []
+                for client_id in self.clients:  
+                    tasks.append(self.send(data, client_id))
+                if tasks:
+                    await asyncio.gather(*tasks)
+
+                self.sensor_entities.clear_datas()
+                
+                await asyncio.sleep(self.data_interval/1000)
+            except Exception as e:
+                print(f"Broadcast error: {str(e)}")
 
     def close(self):
         self.server.close()
-        self.work_flag = False
-        # print('close done1')
-        # print( self.server_thread.is_alive())
-        # self.server_thread.join()
+        self.running = False
         while len(self.clients):
             time.sleep(0.01)
         print('close done')
 
     def server_run(self):
-        asyncio.run(self.main())
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.main())
 
-    async def main(self):
-        self.server = await websockets.serve(self.websocket_loop, "0.0.0.0", self.port)
-        print(f'websocket server start at port {self.port}')
-        async with self.server:
-            await asyncio.Future() # run forever
-        print('server closed')
-
-    async def on_receive(self, data, client_num):
+    async def on_receive(self, data, client_id):
         # command
         if isinstance(data, str):
             # print(f"Received string ({client_id}): {data}")
@@ -137,88 +175,72 @@ class MammothWebSocket():
                 # handle command
                 self.on_io_data(data)
             else:
-                print(f"Invalid command format ({client_num}): {data}")
+                print(f"Invalid command format ({client_id}): {data}")
 
-    def _on_connect(self, *args, **kwargs):
-        print(f"On connected: {args} {kwargs}")
+    async def _on_connect(self, websocket):
+        client_id = self.client_num
+        client_ip = websocket.remote_address[0]
+        client = {
+            'id': client_id,
+            'ip': client_ip,
+            'websocket': websocket,
+        }
+        self.clients[client_id] = client
+
+        print(f'client {client_id, client_ip} connected')
+
+        # Send device info
+        await websocket.send(json.dumps(self.device_info))
+
         if self.on_connect is not None:
             self.on_connect()
+    
+        self.client_num += 1
 
-    def _on_disconnect(self, *args, **kwargs):
-        print(f"On disconneted: {args} {kwargs}")
+        return client_id
+
+    async def _on_disconnect(self, client_id):
+        client = self.clients[client_id]
+        client_ip = client['ip']
+        print(f'client {client_id, client_ip} disconnected')
+        self.clients.pop(client_id, None)
+
         if self.on_disconnect is not None:
             self.on_disconnect()
 
-    async def websocket_loop(self, websocket):
-        _client_id = str(self.client_num)
-        _client_ip = websocket.remote_address[0]
-        _client = {
-            'id': _client_id,
-            'ip': _client_ip,
-            'websocket': websocket,
-        }
-        self.client_num  += 1
-        self.clients[str(_client_id)] = _client
-        print(f'client {_client_id, _client_ip} conneted')
-
-        ## send_device_info
-        await websocket.send(json.dumps(self.device_info))
-
-        self._on_connect(_client_id)
-
+    async def receive_message(self, websocket, client_id):
         try:
-            # listen messages loop
             async for message in websocket:
                 # print(f'{time.time()-self.last_rev_time:.5f} {_client_id}: {message}')
                 self.last_rev_time = time.time()
                 if self.on_receive != None:
-                    await self.on_receive(message, _client_id)
+                    await self.on_receive(message, client_id)
                 # await websocket.send('ok')
-                
-            # disconneted normally
-            print(f'client {_client_id, _client_ip} disconneted normally.')
-
-        ## disconneted with error
         except websockets.exceptions.ConnectionClosedError as e:
-            print(f'client {_client_id, _client_ip} disconneted with error:\n{e.code}:{e.reason}')
-            
-        ## disconneted handler
-        self._on_disconnect(_client_id)
+            print(f'Client {client_id} disconnected: {e}')
 
-        ## remove client
-        self.clients.pop(str(_client_id))
+    async def websocket_loop(self, websocket):
+        client_id = await self._on_connect(websocket)
 
-    async def async_send(self, data, client_num=None):
-        ## define send single client function
-        async def _send_work(client_num, data):
-            client = self.clients[str(client_num)]
-            try:
-                await client['websocket'].send(data) 
-            except websockets.exceptions.ConnectionClosed as connection_code:
-                print(f'{client_num}: {connection_code}')
-                _ip = client['ip']
-                print(f'client {client_num, _ip} disconneted')
-                self.clients.pop(str(client_num))
+        try:
+            await self.receive_message(websocket, client_id)
+        finally:
+            await self._on_disconnect(client_id)
 
-        ## send data
-        if len(self.clients) > 0:
-            # send all clients
-            if client_num is None:
-                await asyncio.gather(
-                    *[_send_work(client_num, data) for client_num in self.clients.keys()]
-                )
-            # send to single client with client_num
-            else: 
-                await _send_work(client_num, data)
+    async def send(self, data, client_id):
+        client = self.clients.get(client_id)
+        try:
+            await client['websocket'].send(data)
+        except websockets.exceptions.ConnectionClosedError as e:
+            print(f'Client {client_id} disconnected: {e}')
+            self._on_disconnect(client_id)
 
-            # print('send data: %s'%data)
-
-    async def send_sensor_data(self):
-        # for id, sensor in self.sensor_entities.ids.items():
-        #     print(f'{sensor.name}: {sensor.values}')
-        data = self.entities_to_bytes(self.sensor_entities)
+    # async def send_sensor_data(self):
+    #     # for id, sensor in self.sensor_entities.ids.items():
+    #     #     print(f'{sensor.name}: {sensor.values}')
+    #     data = self.entities_to_bytes(self.sensor_entities)
         
-        await self.async_send(data)
+    #     await self.async_send(data)
 
     async def response(self, status, error=[], data={}):
         _response = {
@@ -228,9 +250,8 @@ class MammothWebSocket():
         }
         await self.async_send(json.dumps(_response))
     
-    def send(self, data, client_num=None):
-        asyncio.run(self.async_send(data, client_num))
-
+    # def send(self, data, client_id=None):
+    #     asyncio.run(self.async_send(data, client_id))
 
     def entities_to_bytes(self, entities):
         '''
@@ -268,6 +289,9 @@ class MammothWebSocket():
         checksum = 0
         for d in data:
             checksum ^= d
+
+        if len(data) == 0:
+            return []
 
         ## pack data
         data = [START] + [len(data)] + [checksum] + data + [END]
@@ -341,6 +365,13 @@ class MammothWebSocket():
                 _data = bytes_to_numbers(_data, _types)
                 result[entity.name] = _data
         return result
+
+    async def main(self):
+        self.server = await websockets.serve(self.websocket_loop, "0.0.0.0", self.port)
+        print(f'websocket server start at port {self.port}')
+        async with self.server:
+            await asyncio.Future() # run forever
+        print('server closed')
 
 
 

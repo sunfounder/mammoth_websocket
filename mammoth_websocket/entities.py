@@ -1,3 +1,4 @@
+import threading
 
 class Entity:
     def __init__(self, name, id, types):
@@ -40,9 +41,15 @@ class Entity:
 class Entities():
     def __init__(self):
         self.ids = {}
+        self.data_lock = threading.Lock()
 
     def add(self, name, id, types):
         entity = Entity(name, id, types)
         self.ids[id] = entity
         self.__setattr__(name, entity)
+
+    def clear_datas(self):
+        with self.data_lock:
+            for _, entity in self.ids.items():
+                entity.values = None
 
