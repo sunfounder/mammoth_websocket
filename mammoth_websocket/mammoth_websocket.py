@@ -63,7 +63,14 @@ def bytes_to_numbers(byte_list, data_types, endianness='big'):
     else:
         raise ValueError("Unsupported endianness. Use 'big' or 'little'.")
 
-    return list(struct.unpack(f'{endian_prefix}{format_char}', bytes(byte_list)))
+    # 使用struct模块打包二进制数据
+    format_str = f'{endian_prefix}{format_char}'
+    try:
+        packed = struct.pack(format_str, *data)
+    except struct.error as e:
+        raise ValueError(f"Data packing error: {e}") from None
+    
+    return list(packed)  # 直接返回struct打包后的字
 
 
 class MammothWebSocket():
@@ -104,38 +111,38 @@ class MammothWebSocket():
     async def broadcast_sensor_data(self):
         """Broadcast sensor data to all connected clients."""
         while self.running:
-            try:
-                # 添加数据有效性检查
-                if not self.sensor_entities:
-                    print("Sensor entities not initialized")
-                    await asyncio.sleep(1)
-                    continue
-                
-                # 生成传感器数据
-                with self.sensor_entities.data_lock:
-                    data = self.entities_to_bytes(self.sensor_entities)
-                
-                if len(data) == 0:
-                    await asyncio.sleep(self.data_interval/1000)
-
-                if len(self.clients) == 0:
-                    await asyncio.sleep(self.data_interval/1000)
-                    continue
-                
-                # print(f"Broadcasting data: {' '.join([f'{x:02x}' for x in data])}")
-
-                # 遍历所有客户端广播
-                tasks = []
-                for client_id in self.clients:  
-                    tasks.append(self.send(data, client_id))
-                if tasks:
-                    await asyncio.gather(*tasks)
-
-                self.sensor_entities.clear_datas()
-                
+            # try:
+            # 添加数据有效性检查
+            if not self.sensor_entities:
+                print("Sensor entities not initialized")
+                await asyncio.sleep(1)
+                continue
+            
+            # 生成传感器数据
+            with self.sensor_entities.data_lock:
+                data = self.entities_to_bytes(self.sensor_entities)
+            
+            if len(data) == 0:
                 await asyncio.sleep(self.data_interval/1000)
-            except Exception as e:
-                print(f"Broadcast error: {str(e)}")
+
+            if len(self.clients) == 0:
+                await asyncio.sleep(self.data_interval/1000)
+                continue
+            
+            # print(f"Broadcasting data: {' '.join([f'{x:02x}' for x in data])}")
+
+            # 遍历所有客户端广播
+            tasks = []
+            for client_id in self.clients:  
+                tasks.append(self.send(data, client_id))
+            if tasks:
+                await asyncio.gather(*tasks)
+
+            self.sensor_entities.clear_datas()
+            
+            await asyncio.sleep(self.data_interval/1000)
+            # except Exception as e:
+            #     print(f"Broadcast error: {str(e)}")
 
     def close(self):
         self.server.close()
@@ -276,11 +283,15 @@ class MammothWebSocket():
                 continue
 
             if 'str' in entity.types:
-                string = entity.value
-                str_length = len(string)
-                if str_length > 0:
-                    result.extend(numbers_to_bytes([str_length], [entity.types[0]]))
-                    result.extend(bytes(string, 'utf-8'))
+                string = entity.values
+                print(f'string: {string}')
+                if len(string) > 0:
+                    string_bytes = bytes(string, 'utf-8')
+                    print(f'string_bytes: {" ".join([f"0x{d:02x}" for d in string_bytes])}')
+                    byte_length = len(string_bytes)
+                    print(f'byte_length: {byte_length}')
+                    result.extend(numbers_to_bytes([byte_length], [entity.types[0]]))
+                    result.extend(string_bytes)
             else:
                 result.extend(numbers_to_bytes(entity.values, entity.types))
             data += [_id] + result
@@ -295,7 +306,7 @@ class MammothWebSocket():
 
         ## pack data
         data = [START] + [len(data)] + [checksum] + data + [END]
-        # print(f'data_hex: {[f'0x{d:02x}' for d in data]}')
+        print(f'data_hex: {[f'0x{d:02x}' for d in data]}')
         return bytes(data)
 
     def bytes_to_entities(self, entities, data):
