@@ -24,10 +24,10 @@ class MammothWebSocket():
         self.server_thread = None
         self.broadcast_thread = None
         self.loop = None
-        self.__user_on_device_config__ = lambda x: None
-        self.__user_on_io_data__ = lambda x: None
-        self.__user_on_connect__ = lambda x: None
-        self.__user_on_disconnect__ =lambda x: None
+        self.__user_on_device_config__ = lambda x: asyncio.sleep(0)
+        self.__user_on_io_data__ = lambda x: asyncio.sleep(0)
+        self.__user_on_connect__ = lambda x: asyncio.sleep(0)
+        self.__user_on_disconnect__ =lambda x: asyncio.sleep(0)
         self.io_data = {}
         self.__device_info__ = {}
 
@@ -35,15 +35,23 @@ class MammothWebSocket():
         self.__device_info__ = device_info
 
     def set_on_device_config(self, on_device_config):
+        if not asyncio.iscoroutinefunction(on_device_config):
+            raise TypeError("on_device_config must be a coroutine function")
         self.__user_on_device_config__ = on_device_config
 
     def set_on_io_data(self, on_io_data):
+        if not asyncio.iscoroutinefunction(on_io_data):
+            raise TypeError("on_io_data must be a coroutine function")
         self.__user_on_io_data__ = on_io_data
 
     def set_on_connect(self, on_connect):
+        if not asyncio.iscoroutinefunction(on_connect):
+            raise TypeError("on_connect must be a coroutine function")
         self.__user_on_connect__ = on_connect
 
     def set_on_disconnect(self, on_disconnect):
+        if not asyncio.iscoroutinefunction(on_disconnect):
+            raise TypeError("on_disconnect must be a coroutine function")
         self.__user_on_disconnect__ = on_disconnect
 
     def update_io_data(self, data):
@@ -63,7 +71,7 @@ class MammothWebSocket():
         await websocket.send(json.dumps(self.__device_info__))
 
         try:
-            self.__user_on_connect__(client_id)
+            await self.__user_on_connect__(client_id)
         except Exception as e:
             print(f"on_connect error: {str(e)}")
     
@@ -77,7 +85,7 @@ class MammothWebSocket():
         self.clients.pop(client.id, None)
 
         try:
-            self.__user_on_disconnect__(client.id)
+            await self.__user_on_disconnect__(client.id)
         except Exception as e:
             print(f"on_disconnect error: {str(e)}")
 
@@ -91,7 +99,7 @@ class MammothWebSocket():
                 except Exception as e:
                     await self.response('ERROR', ['Invalid json format', f'{e}'] )
                 try:
-                    self.__user_on_device_config__(data)
+                    await self.__user_on_device_config__(data)
                 except Exception as e:
                     print(f"on_io_data error: {str(e)}")
                 await self.response('OK')
@@ -102,7 +110,7 @@ class MammothWebSocket():
                 except Exception as e:
                     await self.response('ERROR', ['Invalid json format', f'{e}'] )
                 try:
-                    self.__user_on_io_data__(data)
+                    await self.__user_on_io_data__(data)
                 except Exception as e:
                     print(f"on_io_data error: {str(e)}")
             else:
