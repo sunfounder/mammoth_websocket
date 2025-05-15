@@ -20,7 +20,6 @@ class MammothWebSocket():
         self.clients = {}
         self.data_interval = data_interval
         self.running = False
-        self.running = False
         self.server_thread = None
         self.broadcast_thread = None
         self.loop = None
@@ -97,10 +96,19 @@ class MammothWebSocket():
                 await self.response('OK')
             if data.startswith('DATA+'):
                 data = data[5:]
-                try:
-                    data = json.loads(data)
-                except Exception as e:
-                    await self.response('ERROR', ['Invalid json format', f'{e}'] )
+                if data != '':
+                    try:
+                        data = json.loads(data)
+                    except Exception as e:
+                        await self.response('ERROR', ['Invalid json format', f'{e}'] )
+
+                # send data to client
+                # print(f"GS: {self.io_data['grayscale_value']}")
+                to_send = self.get_packed_io_data()
+                # print(f"Send data: {to_send}")
+                await self.send(to_send, client_id)
+
+                # handle received data
                 try:
                     self.__user_on_io_data__(data)
                 except Exception as e:
@@ -128,13 +136,21 @@ class MammothWebSocket():
         self.server_thread = threading.Thread(target=self.server_run)
         self.server_thread.daemon = True
         self.server_thread.start()
-        self.broadcast_thread = threading.Thread(target=self.run_broadcast)
-        self.broadcast_thread.start()
+        # self.broadcast_thread = threading.Thread(target=self.run_broadcast)
+        # self.broadcast_thread.start()
 
     def run_broadcast(self):
         self.broadcast_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.broadcast_loop)
         self.broadcast_loop.run_until_complete(self.broadcast_io_data())
+
+    def get_packed_io_data(self):
+        data = { "io_data": self.io_data }
+        data = json.dumps(data)
+
+        # Add data header
+        data = f'DATA+{data}'
+        return data
 
     async def broadcast_io_data(self):
         """Broadcast sensor data to all connected clients."""
@@ -147,11 +163,10 @@ class MammothWebSocket():
                 await asyncio.sleep(self.data_interval/1000)
                 continue
 
-            data = { "io_data": self.io_data }
-            data = json.dumps(data)
-            # print(f'broadcast data: {data}')
+            data = self.get_packed_io_data()
 
             # 遍历所有客户端广播
+            print(f'broadcast data: {data}')
             await self.send_all(data)
             self.io_data = {}
             
