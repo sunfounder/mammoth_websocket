@@ -58,7 +58,7 @@ class MammothWebSocket():
 
     async def on_disconnect(self):
         print(f'client {self.client_ip} disconnected')
-        self.client = None
+        self.websocket = None
 
         if self.__user_on_disconnect__:
             self.__user_on_disconnect__()
@@ -96,7 +96,6 @@ class MammothWebSocket():
             self.on_disconnect()
 
     async def websocket_loop(self, websocket):
-        print("websocket_loop")
         if not await self.on_connect(websocket):
             return False
 
