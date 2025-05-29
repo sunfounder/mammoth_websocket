@@ -13,8 +13,6 @@ class MammothWebSocket():
         self.client_ip = None
         self.server_thread = None
         self.server = None
-        self.loop = None
-        self.main_future = None
         self.__user_on_device_config__ = None
         self.__user_on_io_data__ = None
         self.__user_on_connect__ = None
