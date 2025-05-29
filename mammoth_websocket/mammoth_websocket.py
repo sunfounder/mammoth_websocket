@@ -3,12 +3,6 @@ import websockets
 import json
 import threading
 
-class Client:
-    def __init__(self, id, ip, websocket):
-        self.id = id
-        self.websocket = websocket
-        self.ip = ip
-
 class MammothWebSocket():
 
     DEFAULT_PORT = 30102
@@ -17,9 +11,10 @@ class MammothWebSocket():
         self.port = port
         self.websocket = None
         self.client_ip = None
-        self.running = False
         self.server_thread = None
+        self.server = None
         self.loop = None
+        self.main_future = None
         self.__user_on_device_config__ = None
         self.__user_on_io_data__ = None
         self.__user_on_connect__ = None
@@ -29,19 +24,19 @@ class MammothWebSocket():
     def set_device_info(self, device_info):
         self.__device_info__ = device_info
 
-    def set_on_device_config(self, on_device_config):
+    def set_device_config_handler(self, on_device_config):
         self.__user_on_device_config__ = on_device_config
 
-    def set_on_io_data(self, on_io_data):
+    def set_io_data_handler(self, on_io_data):
         self.__user_on_io_data__ = on_io_data
 
-    def set_on_connect(self, on_connect):
+    def set_connect_handler(self, on_connect):
         self.__user_on_connect__ = on_connect
 
-    def set_on_disconnect(self, on_disconnect):
+    def set_disconnect_handler(self, on_disconnect):
         self.__user_on_disconnect__ = on_disconnect
 
-    async def on_connect(self, websocket):
+    async def handle_connect(self, websocket):
         if self.websocket:
             return False
         self.websocket = websocket
@@ -56,14 +51,14 @@ class MammothWebSocket():
             self.__user_on_connect__()
         return True
 
-    async def on_disconnect(self):
+    async def handle_disconnect(self):
         print(f'client {self.client_ip} disconnected')
         self.websocket = None
 
         if self.__user_on_disconnect__:
             self.__user_on_disconnect__()
 
-    async def on_receive(self, data):
+    async def handle_receive(self, data):
         if isinstance(data, str):
             if data.startswith('SET+'):
                 data = data[4:]
@@ -88,46 +83,54 @@ class MammothWebSocket():
             else:
                 await self.response('ERROR', ['Invalid command format'])
 
-    async def receive_message(self, websocket):
+    async def process_received_messages(self, websocket):
         try:
             async for message in websocket:
-                await self.on_receive(message)
+                await self.handle_receive(message)
         except websockets.exceptions.ConnectionClosedError as e:
-            self.on_disconnect()
+            await self.handle_disconnect()
 
-    async def websocket_loop(self, websocket):
-        if not await self.on_connect(websocket):
+    async def websocket_connection_loop(self, websocket):
+        if not await self.handle_connect(websocket):
             return False
-
         try:
-            await self.receive_message(websocket)
+            await self.process_received_messages(websocket)
         finally:
-            await self.on_disconnect()
+            await self.handle_disconnect()
 
     def start(self):
-        self.running = True
-        self.server_thread = threading.Thread(target=self.server_run)
+        self.server_thread = threading.Thread(target=self.run_server_in_thread)
         self.server_thread.daemon = True
         self.server_thread.start()
 
     def close(self):
-        self.server.close()
-        self.running = False
+        if self.server:
+            self.server.close()
+        if self.server_thread:
+            self.server_thread.join(timeout=2)
+            self.server_thread = None
+        
+        self.websocket = None
+        self.server = None
+        print("Server closed")
 
-    def server_run(self):
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self.main())
+    def run_server_in_thread(self):
+        try:
+            asyncio.run(self.main())
+        except Exception as e:
+            print(f"Server thread error: {e}")
 
     async def send(self, data):
         try:
+            if self.websocket is None:
+                return
             await self.websocket.send(data)
         except websockets.exceptions.ConnectionClosedError as e:
-            self.on_disconnect()
+            await self.handle_disconnect()
         except websockets.exceptions.ConnectionClosedOK as e:
-            self.on_disconnect()
+            await self.handle_disconnect()
         except RuntimeError as e:
-            self.on_disconnect()
+            await self.handle_disconnect()
 
     async def response(self, status, error=[], data={}):
         _response = {
@@ -138,11 +141,15 @@ class MammothWebSocket():
         await self.send(json.dumps(_response))
 
     async def main(self):
-        self.server = await websockets.serve(self.websocket_loop, "0.0.0.0", self.port)
+        self.server = await websockets.serve(self.websocket_connection_loop, "0.0.0.0", self.port)
         print(f'websocket server start at port {self.port}')
-        async with self.server:
-            await asyncio.Future() # run forever
-        print('server closed')
+        loop = asyncio.get_event_loop()  # 获取当前事件循环
+        try:
+            await self.server.serve_forever()  # 捕获 serve_forever 的取消异常
+        except asyncio.CancelledError:
+            print("Server Cancelled...")
+        finally:
+            loop.stop()  # 显式停止事件循环
 
 
 
