@@ -54,11 +54,14 @@ class MammothWebSocket():
         self.websocket = None
 
         if self.__user_on_disconnect__:
-            self.__user_on_disconnect__()
+            await self.__user_on_disconnect__()
 
     async def handle_receive(self, data):
+        # print(f'received: {data}')
         if isinstance(data, str):
+            # print("Handle string data")
             if data.startswith('SET+'):
+                # print("Set device config")
                 data = data[4:]
                 try:
                     data = json.loads(data)
@@ -67,7 +70,7 @@ class MammothWebSocket():
                 if self.__user_on_device_config__:
                     await self.__user_on_device_config__(data)
                 await self.response('OK')
-            if data.startswith('DATA+'):
+            elif data.startswith('DATA+'):
                 data = data[5:]
                 if data != '':
                     try:
