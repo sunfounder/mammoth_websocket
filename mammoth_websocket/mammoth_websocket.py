@@ -113,7 +113,6 @@ class MammothWebSocket():
         
         self.websocket = None
         self.server = None
-        print("Server closed")
 
     def run_server_in_thread(self):
         try:
