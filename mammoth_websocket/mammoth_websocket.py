@@ -40,13 +40,11 @@ class MammothWebSocket():
         self.websocket = websocket
         self.client_ip = websocket.remote_address[0]
 
-        print(f'client {self.client_ip} connected')
-
         # Send device info
         await websocket.send(json.dumps(self.__device_info__))
 
         if self.__user_on_connect__:
-            self.__user_on_connect__()
+            await self.__user_on_connect__(self.client_ip)
         return True
 
     async def handle_disconnect(self):
